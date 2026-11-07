@@ -1,0 +1,39 @@
+{
+  "pages": {
+    "en": {
+      "Abschlussbewertungen": "Final ratings",
+      "Aktiv setzen & QR-Code": "Set active & QR code",
+      "Aktiv setzen & QR-Code zeigen": "Set active & show QR code",
+      "Aktivieren fehlgeschlagen — bitte erneut versuchen.": "Activation failed — please try again.",
+      "Alle Zusammenfassungen haben eine KI-Antwort.": "All summaries have an AI response.",
+      "Antwort der KI eintragen": "Enter AI response",
+      "Antwort eintragen": "Enter response",
+      "Antwort fehlt": "Response missing",
+      "Erste Veranstaltung anlegen": "Create first event",
+      "Ersten Schritt aktivieren": "Activate first step",
+      "Interaktion anlegen": "Create interaction",
+      "Keine Interaktion in diesem Filter.": "No interactions in this filter.",
+      "Kürzel {0}": "Code {0}",
+      "Lege deine erste Veranstaltung an, dann kannst du Interaktionen vorbereiten.": "Create your first event, then you can prepare interactions.",
+      "Neue Abschlussbewertungen": "New final ratings",
+      "Neue Veranstaltung": "New event",
+      "Noch keine Abschlussbewertung eingegangen.": "No final rating received yet.",
+      "Noch keine Interaktionen — lege den ersten Schritt dieser Veranstaltung an.": "No interactions yet — create the first step of this event.",
+      "Noch keine Veranstaltung. Lege eine an und bereite dann die Interaktionen für den Abend vor.": "No event yet. Create one, then prepare the interactions for the evening.",
+      "Noch nicht zusammengefasst": "Not yet summarized",
+      "Ohne Feedback": "No feedback",
+      "QR-Code zeigen": "Show QR code",
+      "Schritt": "Step",
+      "Weitere Interaktion": "Another interaction",
+      "Zusammenfassen": "Summarize",
+      "Zusammenfassung öffnen": "Open summary",
+      "hat noch keine aktive Interaktion — die Teilnehmenden sehen derzeit kein Formular.": "has no active interaction yet — participants currently see no form.",
+      "{0} hat noch keine Interaktionen — lege den ersten Schritt an.": "{0} has no interactions yet — create the first step.",
+      "{0}: aktiv ist „{1}“ — {2} bisher.": "{0}: active is \"{1}\" — {2} so far.",
+      "{0}: noch keine Interaktion aktiv — starte mit „{1}“.": "{0}: no interaction active yet — start with \"{1}\".",
+      "„{0}“ ist jetzt aktiv": "\"{0}\" is now active",
+      "● Aktiv — Teilnehmende sehen diese Frage": "● Active — participants see this question"
+    }
+  },
+  "v": 1
+}
