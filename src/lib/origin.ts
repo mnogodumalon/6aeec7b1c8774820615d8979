@@ -62,9 +62,10 @@ export async function restFetch(input: string, init?: RequestInit): Promise<Resp
     await acquire();
     let res: Response;
     try { res = await fetch(input, init); } finally { release(); }
-    if (res.status !== 429 || attempt >= 4) return res;
+    if ((res.status !== 429 && res.status !== 503) || attempt >= 8) return res;
     const retryAfter = Number(res.headers.get('retry-after'));
-    const ms = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 250 * (attempt + 1);
+    const backoff = Math.min(250 * 2 ** attempt, 4000) + Math.random() * 250;
+    const ms = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : backoff;
     await new Promise(r => setTimeout(r, ms));
   }
 }
