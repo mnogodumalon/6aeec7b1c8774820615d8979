@@ -167,6 +167,211 @@ function checkLinkedChildren(slug, src, file, sink) {
     }
   }
 }
+// ── Every way a page WRITES a field (EF-33, Doodle 0.0.541) ─────────────────
+// A repair hid `auswahl` in a plan step's `values` after check-plan refused it as a visitor
+// field — the grant did not list it and the live POST got 400. What a page writes is: the
+// form's `fields` (useStepForm), a plan step's `values` and `link` (useJourneySubmit), and a
+// direct createPublicRecord payload. Returns [{ entity|null, key, how, line }].
+function wkMatchClose(src, open) {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '{' || ch === '(' || ch === '[') depth++;
+    else if (ch === '}' || ch === ')' || ch === ']') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+function wkEnclosingOpen(src, at) {
+  let depth = 0;
+  for (let i = at; i >= 0; i--) {
+    const ch = src[i];
+    if (ch === '}' || ch === ')' || ch === ']') depth++;
+    else if (ch === '{' || ch === '(' || ch === '[') { if (depth === 0) return ch === '{' ? i : -1; depth--; }
+  }
+  return -1;
+}
+function wkTopKeys(obj) {
+  const body = obj.slice(1, -1);
+  const parts = [];
+  let depth = 0, start = 0, quote = null;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (quote) { if (ch === quote && body[i - 1] !== '\\') quote = null; continue; }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+    if ('([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch)) depth--;
+    else if (ch === ',' && depth === 0) { parts.push(body.slice(start, i)); start = i + 1; }
+  }
+  parts.push(body.slice(start));
+  const keys = [];
+  for (const p of parts) {
+    const t = p.trim();
+    if (t.startsWith('...') || t.startsWith('[')) { keys.push('*'); continue; }   // a spread or a computed key: unknown
+    if (!t) continue;
+    const m = /^['"]?([A-Za-z_$][\w$]*)['"]?\s*(?::|$)/.exec(t);
+    if (m) keys.push(m[1]);
+  }
+  return keys;
+}
+function writtenKeys(src) {
+  const out = [];
+  const lineAt = (i) => src.slice(0, i).split('\n').length;
+  // a plan step: { key, entity: 'x', …, values: {…} | () => ({…}), link: {…} }
+  for (const m of src.matchAll(/\bentity\s*:\s*['"](\w+)['"]/g)) {
+    const open = wkEnclosingOpen(src, m.index - 1);
+    if (open < 0) continue;
+    const close = wkMatchClose(src, open);
+    if (close < 0) continue;
+    const obj = src.slice(open, close + 1);
+    for (const how of ['values', 'link']) {
+      const vm = new RegExp(`\\b${how}\\s*:\\s*(?:\\([^)]*\\)\\s*(?::\\s*[\\w.<>\\[\\], ]+)?\\s*=>\\s*\\(?\\s*)?\\{`).exec(obj);
+      if (!vm) continue;
+      const vOpen = open + vm.index + vm[0].length - 1;
+      const vClose = wkMatchClose(src, vOpen);
+      if (vClose < 0) continue;
+      for (const key of wkTopKeys(src.slice(vOpen, vClose + 1))) out.push({ entity: m[1], key, how, line: lineAt(vOpen) });
+    }
+  }
+  // the form's fields: useStepForm('x', { fields: ['a', 'b'] })
+  for (const m of src.matchAll(/\buseStepForm\(\s*['"](\w+)['"]\s*,\s*\{/g)) {
+    const open = m.index + m[0].length - 1;
+    const close = wkMatchClose(src, open);
+    if (close < 0) continue;
+    const fm = /\bfields\s*:\s*\[([^\]]*)\]/.exec(src.slice(open, close + 1));
+    if (!fm) { out.push({ entity: m[1], key: '*', how: 'form', line: lineAt(m.index) }); continue; }
+    for (const k of fm[1].matchAll(/['"](\w+)['"]/g)) out.push({ entity: m[1], key: k[1], how: 'form', line: lineAt(m.index) });
+  }
+  // a direct createPublicRecord(cfg, page, { … })
+  for (const m of src.matchAll(/\bcreatePublicRecord\(\s*[^,]+,\s*[^,]+,\s*\{/g)) {
+    const open = m.index + m[0].length - 1;
+    const close = wkMatchClose(src, open);
+    if (close < 0) continue;
+    for (const key of wkTopKeys(src.slice(open, close + 1))) out.push({ entity: null, key, how: 'createPublicRecord', line: lineAt(m.index) });
+  }
+  return out;
+}
+// EF-33: every key a page writes (form fields, a plan step's values/link, a direct
+// createPublicRecord) is one its grant lists — anything else is a 400 on the live POST
+function checkWrittenKeys(slug, src, endpoints, file, sink) {
+  const creates = (endpoints || []).filter(e => e.op === 'create');
+  const keyOf = f => (typeof f === 'string' ? f : f && f.key);
+  const allowedBy = new Map(creates.map(e => [e.entity, new Set([...(e.fields || []).map(keyOf), ...Object.keys(e.preset_fields || {}), ...Object.keys(e.default_fields || {})])]));
+  const all = new Set([...allowedBy.values()].flatMap(s => [...s]));
+  const seen = new Set();
+  for (const w of writtenKeys(src)) {
+    const allowed = w.entity ? allowedBy.get(w.entity) : all;
+    if (!allowed) { if (w.how !== 'form') sink.push(`${file}:${w.line}: page '${slug}' writes '${w.entity}.${w.key}' (${w.how}) but declares no create endpoint for '${w.entity}' — the POST is refused`); continue; }
+    if (w.key === '*' || allowed.has(w.key)) continue;
+    const id = `${w.entity}.${w.key}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    sink.push(`${file}:${w.line}: page '${slug}' writes '${w.entity ?? 'the record'}.${w.key}' through ${w.how} — the grant does not list it (${[...(allowed || [])].join(', ') || 'nothing'}), the live POST answers 400. Never move a refused field to another write path: remove the write, or the page needs the field in the plan (report it)`);
+  }
+}
+// EF-38 (Doodle Kontrollbau 3): the required names never reached the POST — 400 missing_fields live.
+// Every required field of a create endpoint comes from the form, a plan step's values/link, or a preset.
+function checkRequiredSources(slug, src, endpoints, file, sink) {
+  if (!appMeta) return;
+  const written = writtenKeys(src);
+  for (const ep of (endpoints || []).filter(e => e.op === 'create')) {
+    const mine = written.filter(w => w.entity === ep.entity);
+    if (mine.some(w => w.key === '*') || !mine.length) continue;      // a spread or no plan step: not judged
+    const keyOf = f => (typeof f === 'string' ? f : f && f.key);
+    const listed = new Set((ep.fields || []).map(keyOf));
+    const controls = appMeta.apps?.[ep.entity]?.controls || {};
+    const req = c => c && c.required && c.required !== 'None' && c.required !== 'False';
+    const required = [...listed].filter(k => req(controls[k]) || (ep.fields || []).some(f => typeof f === 'object' && f && f.key === k && f.required));
+    const have = new Set([...mine.map(w => w.key), ...Object.keys(ep.preset_fields || {}), ...Object.keys(ep.default_fields || {})]);
+    const missing = required.filter(k => !have.has(k));
+    if (missing.length) {
+      sink.push(`${file}: page '${slug}' creates '${ep.entity}' but never writes its required ${missing.map(k => `'${k}'`).join(', ')} (not in the form's fields, a plan step's values/link, or a preset) — the platform answers 400 missing_fields; put the form into the step (form: <the form>) or the value into values`);
+    }
+  }
+}
+// EF-39 (Doodle KB 3): the send handler read the poll and the answers itself BEFORE submit.run —
+// offline that read failed, the page said „Das hat gerade nicht geklappt“, nothing was saved or resent
+// (the EF-22 class). A read before the send belongs into useJourneySubmit's `check`.
+function functionBodyOpen(src, at) {
+  let open = wkEnclosingOpen(src, at);
+  while (open > 0) {
+    let i = open - 1;
+    while (i >= 0 && /\s/.test(src[i])) i--;
+    if (src[i] === '>' && src[i - 1] === '=') return open;          // an arrow function's body
+    if (src[i] === ')') {
+      let depth = 0, j = i;
+      for (; j >= 0; j--) { if (src[j] === ')') depth++; else if (src[j] === '(' && --depth === 0) break; }
+      const word = /(\w+)\s*$/.exec(src.slice(Math.max(0, j - 20), j));
+      if (!word || !['if', 'for', 'while', 'switch', 'catch'].includes(word[1])) return open;   // a function
+    }
+    open = wkEnclosingOpen(src, open - 1);
+  }
+  return -1;
+}
+function checkReadsBeforeSend(slug, src, file, sink) {
+  for (const s of src.matchAll(/\b(?:const|let)\s+(\w+)\s*=\s*useJourneySubmit\(/g)) {
+    for (const run of src.matchAll(new RegExp(`\\b${s[1]}\\.(?:run|retry)\\(`, 'g'))) {
+      const open = functionBodyOpen(src, run.index);
+      if (open < 0) continue;
+      const before = src.slice(open, run.index);
+      const read = /\b(?:\w+\.(?:get|list|count)\(|fetch\(|freshRef\(|freshFlag\(|listPublicRecords\()/.exec(before);
+      if (read && /\bawait\b|\.then\(/.test(before)) {
+        const line = src.slice(0, open + read.index).split('\n').length;
+        sink.push(`${file}:${line}: page '${slug}' reads the network (${read[0]}…) in the send handler BEFORE ${s[1]}.run — offline that read fails and nothing is saved or resent; put the check into useJourneySubmit(port, plan, { check: async () => … }) (a sentence refuses, a network error goes the offline way)`);
+        break;
+      }
+    }
+  }
+}
+// EF-35 (Doodle): a sticky first column with the name inputs, 402 px wide, covered the whole phone
+// width — no vote button could be reached at any scroll position. A sticky cell in a scrolling
+// table carries text only and stays narrow (max-w ≤ 40vw); the person's inputs go above the table.
+function checkStickyColumn(slug, src, file, sink, warnSink) {
+  for (const m of src.matchAll(/<(\w+)\b[^>]*?className=(?:"([^"]*)"|'([^']*)'|\{`([^`]*)`\})[^>]*>/g)) {
+    const cls = m[2] ?? m[3] ?? m[4] ?? '';
+    if (!/(^|\s)sticky(\s|$)/.test(cls) || !/(^|\s)(left|start)-/.test(cls)) continue;
+    const close = src.indexOf(`</${m[1]}>`, m.index + m[0].length);
+    const inner = close > 0 ? src.slice(m.index + m[0].length, close) : '';
+    const line = src.slice(0, m.index).split('\n').length;
+    if (/<(input|Input|textarea|Textarea|Bound|Field|select|Select|Checkbox|RadioGroup)\b/.test(inner)) {
+      sink.push(`${file}:${line}: page '${slug}' puts an input into a sticky column (<${m[1]} className="…sticky…">) — on a phone it covers the scrolling cells and no button behind it can be reached; ask the person's name ABOVE the table, the sticky column shows text only`);
+    } else if (!/max-w-\[(\d+)vw\]/.test(cls) || Number((/max-w-\[(\d+)vw\]/.exec(cls) || [])[1]) > 40) {
+      warnSink.push(`${file}:${line}: page '${slug}' has a sticky column without a narrow width — give it max-w-[40vw] (or less) so the scrolling cells stay reachable on a phone`);
+    }
+  }
+}
+// EF-37 (Doodle): the page showed 5 of 6 dates — `slice(0, 5)` with no word about the sixth. A list
+// cut to a fixed number says so when there are more (a `length > n` branch next to it).
+// entities that hold another list in numbered slots (termin_1..termin_n) — the same reading as slot_groups()
+function slotHolders() {
+  const out = new Set();
+  if (!appMeta) return out;
+  const byApp = Object.fromEntries(Object.entries(appMeta.apps || {}).map(([k, a]) => [a.app_id, k]));
+  for (const [holder, app] of Object.entries(appMeta.apps || {})) {
+    const groups = {};
+    for (const [key, c] of Object.entries(app.controls || {})) {
+      const m = /^(.+?)_?(\d+)$/.exec(key);
+      const ft = String(c.fulltype || '');
+      if (!m || !ft.startsWith('applookup') || ft.includes('multiple')) continue;
+      const target = byApp[String(c.lookup_app || c.lookupapp || '').replace(/\/+$/, '').split('/').pop()];
+      if (target) (groups[`${m[1]}|${target}`] ??= new Set()).add(Number(m[2]));
+    }
+    if (Object.values(groups).some(s => s.has(1) && s.has(2))) out.add(holder);
+  }
+  return out;
+}
+function checkSilentCut(slug, src, file, sink, mildSink) {
+  const holders = slotHolders();
+  const slotted = [...planOrdered.keys()].some(k => k.startsWith(`${slug}|`) && holders.has(k.split('|')[1]));
+  if (!slotted) sink = mildSink;
+  for (const m of src.matchAll(/\.slice\(\s*0\s*,\s*([A-Za-z_$][\w$.]*|\d+)\s*\)/g)) {
+    const n = m[1];
+    const mentions = new RegExp(`length\\s*(?:>|>=|!==|===)\\s*${n.replace(/[.$]/g, '\\$&')}\\b|${n.replace(/[.$]/g, '\\$&')}\\s*<\\s*[\\w.]+\\.length`).test(src);
+    if (!mentions) {
+      const line = src.slice(0, m.index).split('\n').length;
+      sink.push(`${file}:${line}: page '${slug}' cuts a list to ${n} (.slice(0, ${n})) and never says when there are more — show a sentence when list.length > ${n} („Es gibt mehr Termine, als hier Platz haben.“); never drop silently`);
+    }
+  }
+}
 // EF-31: freshRef reads a REFERENCE; on a yes/no it never returns the id and refuses every send
 function checkFreshKinds(slug, src, file, sink) {
   if (!appMeta) return;
@@ -825,6 +1030,11 @@ if (pageOnly) {
       continue;
     }
     for (const ep of frag.endpoints) checkEndpoint(slug, ep, stagedSrc, fileArg, f);
+    checkWrittenKeys(slug, stagedSrc, frag.endpoints, fileArg, errors);
+    checkStickyColumn(slug, stagedSrc, fileArg, errors, warnings);
+    checkSilentCut(slug, stagedSrc, fileArg, errors, warnings);
+    checkRequiredSources(slug, stagedSrc, frag.endpoints, fileArg, errors);
+    checkReadsBeforeSend(slug, stagedSrc, fileArg, errors);
     checkSiblingLinks(slug, stagedSrc, fileArg, errors);
     checkVisitorKey(slug, stagedSrc, fileArg, errors);
     checkFreshPointer(slug, stagedSrc, fileArg, errors);
@@ -940,6 +1150,11 @@ for (const [slug, page] of surfacePages) {
   if (src) checkPollRate(slug, src, `${PAGES_DIR}/${page.component}.tsx`, warnings);
   if (src) checkLinkedChildren(slug, src, `${PAGES_DIR}/${page.component}.tsx`, warnings);
   if (src) checkFreshKinds(slug, src, `${PAGES_DIR}/${page.component}.tsx`, errors);
+  if (src) checkWrittenKeys(slug, src, page.endpoints, `${PAGES_DIR}/${page.component}.tsx`, errors);
+  if (src) checkStickyColumn(slug, src, `${PAGES_DIR}/${page.component}.tsx`, warnings, warnings);
+  if (src) checkSilentCut(slug, src, `${PAGES_DIR}/${page.component}.tsx`, warnings, warnings);
+  if (src) checkRequiredSources(slug, src, page.endpoints, `${PAGES_DIR}/${page.component}.tsx`, errors);
+  if (src) checkReadsBeforeSend(slug, src, `${PAGES_DIR}/${page.component}.tsx`, warnings);
   // PV-3: the plan ordered a link parameter — the surface must declare it, same entity
   const planned = planLinkParam.get(slug);
   if (planned && (!page.link_param || page.link_param.entity !== planned.entity)) {

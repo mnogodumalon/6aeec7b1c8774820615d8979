@@ -35,17 +35,17 @@ export const PLAN_SUMMARY = "Du moderierst Veranstaltungen und lässt die Teilne
  *  names ONE record, so it reads the singular (J-6, 03.11.2026: „Auswertungen:
  *  Sommerfest“ for one record); the app label is the list's plural. */
 export const NOUNS: Record<string, { one: string; many: string }> = {
-  "veranstaltungen": {
-    "one": "Veranstaltung",
-    "many": "Veranstaltungen"
+  "feedbacks": {
+    "one": "Feedback",
+    "many": "Feedbacks"
   },
   "interaktionen": {
     "one": "Interaktion",
     "many": "Interaktionen"
   },
-  "feedbacks": {
-    "one": "Feedback",
-    "many": "Feedbacks"
+  "veranstaltungen": {
+    "one": "Veranstaltung",
+    "many": "Veranstaltungen"
   },
   "zusammenfassungen": {
     "one": "Zusammenfassung",
@@ -128,11 +128,7 @@ function oneClickValues(sets: Record<string, string | { rel: 'today' | 'now' }>)
 }
 
 /** entity → yes/no field → the reference to its parent: ONE child per parent holds it (EF-25). */
-export const EXCLUSIVE_FLAGS: Record<string, Record<string, string>> = {
-  "interaktionen": {
-    "aktiv": "veranstaltung"
-  }
-};
+export const EXCLUSIVE_FLAGS: Record<string, Record<string, string>> = {};
 
 /** flowLinkFor as a click handler — `action: go ? { label, onClick: go } : undefined`.
  *  When the owning flow asks nothing but which record (FLOW_ONE_CLICK), the

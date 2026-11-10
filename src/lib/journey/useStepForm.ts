@@ -388,6 +388,11 @@ export function useStepForm<E extends EntityKey>(entity: E, options: StepFormOpt
   const occupancyResource = occupancyRuleOf(entity)?.resource;
 
   const [values, setValues] = useState<FormValues>(() => ({ ...(options.initial ?? {}) }));
+  // EF-38 (Doodle Kontrollbau 3): a plan memoised once held the form object of an EARLIER render;
+  // its payload() read the empty names of that render and the POST lacked them (400 missing_fields).
+  // payload() reads the latest values, whichever render's object is asked.
+  const valuesRef = useRef(values);
+  valuesRef.current = values;
   const [labels, setLabels] = useState<Record<string, string>>({});
   // the labels the page's <Field> blocks gave the controls (a ref: a child's
   // effect registers them, nothing has to re-render for a later review)
@@ -722,6 +727,7 @@ export function useStepForm<E extends EntityKey>(entity: E, options: StepFormOpt
   };
 
   const payload = (): FormValues => {
+    const values = valuesRef.current;
     const out: FormValues = {};
     for (const key of keys) {
       // a file is not writable as a value — but a file the person CHOSE here

@@ -69,7 +69,7 @@ export function PublicPageQr({ entity, recordId, page, showLink = true, linkClas
     return <p data-public-qr-missing className={`text-sm text-muted-foreground ${linkClassName ?? ''}`}>{tx('Die Teilnahmeseite ist noch nicht veröffentlicht.')}</p>;
   }
   return (
-    <div className="flex flex-col items-center gap-3" data-public-qr>
+    <div className="flex flex-col items-center gap-3" data-public-qr data-public-link={link}>
       <QrCode value={link} {...qr} />
       {showLink ? <p className={`break-all text-center ${linkClassName ?? 'text-sm text-muted-foreground'}`}>{tx('Oder öffne:')} {link}</p> : null}
     </div>

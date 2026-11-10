@@ -344,7 +344,7 @@ export function ZusammenfassungenDialog({ open, onClose, onSubmit, defaultValues
         <Label htmlFor="interaktion">{labelFor('interaktion')} <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Combobox
           id="interaktion"
-          placeholder="Welche Interaktion?"
+          placeholder=""
           items={interaktionenListAll.map(r => ({
             id: r.record_id,
             label: String(r.fields.frage ?? r.record_id),
@@ -364,7 +364,7 @@ export function ZusammenfassungenDialog({ open, onClose, onSubmit, defaultValues
         <Label htmlFor="zeitpunkt">{labelFor('zeitpunkt')}</Label>
         <DatePicker
           id="zeitpunkt"
-          placeholder="Wann wurde zusammengefasst?"
+          placeholder=""
           mode="datetime"
           value={fields.zeitpunkt ?? null}
           onChange={v => setFields(f => ({ ...f, zeitpunkt: v ?? undefined }))}
@@ -376,7 +376,7 @@ export function ZusammenfassungenDialog({ open, onClose, onSubmit, defaultValues
         <Label htmlFor="zusammenfassung_text">{labelFor('zusammenfassung_text')}</Label>
         <Textarea
           id="zusammenfassung_text"
-          placeholder="Kernpunkte des Gesprächs"
+          placeholder=""
           value={fields.zusammenfassung_text ?? ''}
           onChange={e => setFields(f => ({ ...f, zusammenfassung_text: e.target.value }))}
           rows={3}
@@ -388,7 +388,7 @@ export function ZusammenfassungenDialog({ open, onClose, onSubmit, defaultValues
         <Label htmlFor="ki_antwort">{labelFor('ki_antwort')}</Label>
         <Textarea
           id="ki_antwort"
-          placeholder="Was hat die KI geantwortet?"
+          placeholder=""
           value={fields.ki_antwort ?? ''}
           onChange={e => setFields(f => ({ ...f, ki_antwort: e.target.value }))}
           rows={3}

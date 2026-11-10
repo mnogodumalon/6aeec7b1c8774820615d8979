@@ -15,6 +15,7 @@
 
 import { Sentry } from '@/lib/sentry';
 import { LOOKUP_OPTIONS } from '@/types/app';
+import { withConsent } from '@/lib/consent';
 import { setFieldPolicy, type FieldPolicy } from '@/lib/journey/policy';
 
 // ---------------------------------------------------------------------------
@@ -668,6 +669,8 @@ export async function createPublicRecord(
   fields: Record<string, unknown>,
 ): Promise<PublicRecordResult> {
   fields = dropPresetFields(page, normalizeApplookupRefs(cfg, page, fields));
+  // EF-32: without the consent tick the e-mail is not sent — whatever the page's code does
+  fields = withConsent(page.entity, fields);
   const path = `/apps/${page.app_id}/records`;
   if (cfg.preview) {
     // A preview submit creates a REAL record — deliberately: a form you

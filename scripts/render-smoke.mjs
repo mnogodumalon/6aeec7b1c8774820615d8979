@@ -95,7 +95,15 @@ if (stagedFiles.length > 0) {
     .filter(p => p && p.slug && p.component && (onlySlugs.length === 0 || onlySlugs.includes(p.slug)))
     .map(p => ({ ...p, file: `${PAGES_DIR}/${p.component}.tsx`, internal: false }));
 }
-if (pages.length === 0 && !prepareOnly) {
+// The plan's display views (dashboard.views) are walked too — the chain a live meeting runs:
+// a view for ONE record opened with ?record= shows the right page's link for the right parent, a
+// view that composes writes a text with the children's values (Bau 16/18: QR of another event).
+const planViews = stagedFiles.length === 0
+  ? ((((readJson('.plan.json') || {}).dashboard || {}).views) || []).filter(v => v && v.route)
+      .map(v => ({ ...v, file: `src/pages/views/${String(v.route).split(/[-_]/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join('')}View.tsx` }))
+      .filter(v => existsSync(join(ROOT, v.file)) && (onlySlugs.length === 0 || onlySlugs.includes(v.route)))
+  : [];
+if (pages.length === 0 && planViews.length === 0 && !prepareOnly) {
   console.log('render-smoke: OK (no public pages declared)');
   process.exit(0);
 }
@@ -111,6 +119,89 @@ const apps = (appMeta && appMeta.apps) || {};
 // blocks the example input is red too, not a warning, because the Soll says
 // the input belongs there (G-3, 03.11.2026; before: a repair without a Soll
 // weakened the Soll, B5).
+// ── Every way a page WRITES a field (EF-33, Doodle 0.0.541) ─────────────────
+// A repair hid `auswahl` in a plan step's `values` after check-plan refused it as a visitor
+// field — the grant did not list it and the live POST got 400. What a page writes is: the
+// form's `fields` (useStepForm), a plan step's `values` and `link` (useJourneySubmit), and a
+// direct createPublicRecord payload. Returns [{ entity|null, key, how, line }].
+function wkMatchClose(src, open) {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '{' || ch === '(' || ch === '[') depth++;
+    else if (ch === '}' || ch === ')' || ch === ']') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+function wkEnclosingOpen(src, at) {
+  let depth = 0;
+  for (let i = at; i >= 0; i--) {
+    const ch = src[i];
+    if (ch === '}' || ch === ')' || ch === ']') depth++;
+    else if (ch === '{' || ch === '(' || ch === '[') { if (depth === 0) return ch === '{' ? i : -1; depth--; }
+  }
+  return -1;
+}
+function wkTopKeys(obj) {
+  const body = obj.slice(1, -1);
+  const parts = [];
+  let depth = 0, start = 0, quote = null;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (quote) { if (ch === quote && body[i - 1] !== '\\') quote = null; continue; }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+    if ('([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch)) depth--;
+    else if (ch === ',' && depth === 0) { parts.push(body.slice(start, i)); start = i + 1; }
+  }
+  parts.push(body.slice(start));
+  const keys = [];
+  for (const p of parts) {
+    const t = p.trim();
+    if (t.startsWith('...') || t.startsWith('[')) { keys.push('*'); continue; }   // a spread or a computed key: unknown
+    if (!t) continue;
+    const m = /^['"]?([A-Za-z_$][\w$]*)['"]?\s*(?::|$)/.exec(t);
+    if (m) keys.push(m[1]);
+  }
+  return keys;
+}
+function writtenKeys(src) {
+  const out = [];
+  const lineAt = (i) => src.slice(0, i).split('\n').length;
+  // a plan step: { key, entity: 'x', …, values: {…} | () => ({…}), link: {…} }
+  for (const m of src.matchAll(/\bentity\s*:\s*['"](\w+)['"]/g)) {
+    const open = wkEnclosingOpen(src, m.index - 1);
+    if (open < 0) continue;
+    const close = wkMatchClose(src, open);
+    if (close < 0) continue;
+    const obj = src.slice(open, close + 1);
+    for (const how of ['values', 'link']) {
+      const vm = new RegExp(`\\b${how}\\s*:\\s*(?:\\([^)]*\\)\\s*(?::\\s*[\\w.<>\\[\\], ]+)?\\s*=>\\s*\\(?\\s*)?\\{`).exec(obj);
+      if (!vm) continue;
+      const vOpen = open + vm.index + vm[0].length - 1;
+      const vClose = wkMatchClose(src, vOpen);
+      if (vClose < 0) continue;
+      for (const key of wkTopKeys(src.slice(vOpen, vClose + 1))) out.push({ entity: m[1], key, how, line: lineAt(vOpen) });
+    }
+  }
+  // the form's fields: useStepForm('x', { fields: ['a', 'b'] })
+  for (const m of src.matchAll(/\buseStepForm\(\s*['"](\w+)['"]\s*,\s*\{/g)) {
+    const open = m.index + m[0].length - 1;
+    const close = wkMatchClose(src, open);
+    if (close < 0) continue;
+    const fm = /\bfields\s*:\s*\[([^\]]*)\]/.exec(src.slice(open, close + 1));
+    if (!fm) { out.push({ entity: m[1], key: '*', how: 'form', line: lineAt(m.index) }); continue; }
+    for (const k of fm[1].matchAll(/['"](\w+)['"]/g)) out.push({ entity: m[1], key: k[1], how: 'form', line: lineAt(m.index) });
+  }
+  // a direct createPublicRecord(cfg, page, { … })
+  for (const m of src.matchAll(/\bcreatePublicRecord\(\s*[^,]+,\s*[^,]+,\s*\{/g)) {
+    const open = m.index + m[0].length - 1;
+    const close = wkMatchClose(src, open);
+    if (close < 0) continue;
+    for (const key of wkTopKeys(src.slice(open, close + 1))) out.push({ entity: null, key, how: 'createPublicRecord', line: lineAt(m.index) });
+  }
+  return out;
+}
 const planData = readJson('.plan.json');
 function plannedFields(page) {
   if (!planData) return [];
@@ -131,10 +222,18 @@ function plannedFields(page) {
     // a reference the page sets itself from its linked record (the active interaction — a
     // `must_equal` check of the page; Bau 11 read „no control“ for exactly that)
     const pageSets = new Set((pg && pg.page_sets) || []);
+    // EF-36 (Doodle): a field the page's code sets itself — a plan step's `values`/`link` (the poll from the
+    // link, a row id the page makes) — is no visitor input; demanding a control made the repair print a
+    // machine key on the page
+    let codeSets = new Set();
+    try {
+      const src = readFileSync(join(ROOT, page.file), 'utf8');
+      codeSets = new Set(writtenKeys(src).filter(w => w.how === 'values' || w.how === 'link').map(w => `${w.entity}.${w.key}`));
+    } catch { /* no source — the Soll stays as it is */ }
     for (const c of (pg && pg.creates) || []) {
       for (const [k, src] of Object.entries(c.fields || {})) {
         if (!(String(src).startsWith('user') || src === 'picked')) continue;
-        if (pageSets.has(`${c.entity}.${k}`)) continue;
+        if (pageSets.has(`${c.entity}.${k}`) || codeSets.has(`${c.entity}.${k}`)) continue;
         if (src === 'picked') {
           const target = entityOfAppId(targetAppId(control(c.entity, k)));
           if (target && (target === linkEntity || (created.has(target) && target !== c.entity))) continue;
@@ -509,6 +608,23 @@ function entityByAppId(appId) {
   return Object.keys(apps).find(e => apps[e].app_id === appId) || null;
 }
 
+// EF-32: an entity with a consent yes/no next to e-mail fields — the same reading as consent.ts
+const CONSENT_RE = /(einwilligung|zustimmung|consent|dsgvo|datenschutz)/i;
+function consentPair(entity) {
+  const controls = (apps[entity] || {}).controls || {};
+  const personal = Object.keys(controls).filter(k => /email/.test(String(controls[k].fulltype || '')));
+  const consent = Object.keys(controls).find(k => /^bool/.test(String(controls[k].fulltype || '')) && (CONSENT_RE.test(k) || CONSENT_RE.test(String(controls[k].label || ''))));
+  return personal.length && consent ? { consent, personal } : null;
+}
+function consentViolation(entity, fields) {
+  const pair = entity ? consentPair(entity) : null;
+  if (!pair) return null;
+  const v = fields[pair.consent];
+  if (v === true || v === 'true' || v === 1) return null;
+  const sent = pair.personal.filter(k => typeof fields[k] === 'string' && fields[k].trim());
+  return sent.length ? `${entity}: ${sent.join(', ')} sent without „${pair.consent}“` : null;
+}
+
 // ── 4. The mocked network ─────────────────────────────────────────────────────
 function makeFetch(cfg, log) {
   let inflight = 0;
@@ -544,7 +660,33 @@ function makeFetch(cfg, log) {
       if (m && method === 'POST') {
         let fields = {};
         try { fields = JSON.parse(init && init.body || '{}').fields || {}; } catch { /* body not JSON */ }
+        // EF-33 (Doodle, 0.0.541): a field the grant does not list is refused by the platform with
+        // 400 — the mock accepted anything and the page went live broken. Same rule here.
+        const eps = Object.values(cfg.pages || {}).flatMap(p => (p.endpoints || []).filter(e => e.op === 'create' && e.app_id === m[1]));
+        if (eps.length) {
+          const allowed = new Set(eps.flatMap(e => [...(e.fields || []).map(f => (typeof f === 'string' ? f : f.key)),
+            ...Object.keys(e.preset_fields || {}), ...Object.keys(e.default_fields || {})]));
+          const extra = Object.keys(fields).filter(k => !allowed.has(k));
+          if (extra.length) {
+            log.refused = [...(log.refused || []), `${entityByAppId(m[1]) || m[1]}: ${extra.join(', ')}`];
+            return json({ type: 'unsupported_field', title: 'Unsupported field',
+              detail: `The grant does not allow: ${extra.join(', ')}`, status: 400 }, 400);
+          }
+          // EF-38 (Doodle Kontrollbau 3): a required field of the grant missing in the body is a 400
+          // `missing_fields` on the platform — the names never arrived and nobody could vote
+          const presets = new Set(eps.flatMap(e => [...Object.keys(e.preset_fields || {}), ...Object.keys(e.default_fields || {})]));
+          const required = [...new Set(eps.flatMap(e => (e.fields || []).filter(f => f && typeof f === 'object' && f.required).map(f => f.key)))];
+          const empty = v => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
+          const missing = required.filter(k => !presets.has(k) && empty(fields[k]));
+          if (missing.length) {
+            log.refused = [...(log.refused || []), `${entityByAppId(m[1]) || m[1]}: missing ${missing.join(', ')}`];
+            return json({ type: 'public-grant-validation-error', title: 'Validation error', missing_fields: missing,
+              detail: `Missing required fields: ${missing.join(', ')}`, status: 400 }, 400);
+          }
+        }
         const id = hex24('created:' + log.created.length);
+        const violation = consentViolation(entityByAppId(m[1]), fields);
+        if (violation) (log.consent ??= []).push(violation);
         log.created.push({ app_id: m[1], fields });
         return json({ id, fields, created_at: new Date().toISOString().slice(0, 19), updated_at: null }, 201);
       }
@@ -604,12 +746,12 @@ function makeFetch(cfg, log) {
 // ── 5. A browser-shaped global scope ──────────────────────────────────────────
 const installedGlobals = new Set();
 
-function installDom(slug, onJsdomError, internal = false, query = '') {
+function installDom(slug, onJsdomError, internal = false, query = '', hashPath = null) {
   const virtualConsole = new jsdomMod.VirtualConsole();
   virtualConsole.sendTo(console, { omitJSDOMErrors: true });
   virtualConsole.on('jsdomError', (e) => onJsdomError(e));
   const dom = new JSDOM('<!doctype html><html lang="de"><head></head><body><div id="root"></div></body></html>', {
-    url: `http://smoke.invalid/objects/smoke/#/${internal ? 'intents' : 'public'}/${slug}${query}`,
+    url: `http://smoke.invalid/objects/smoke/#/${hashPath ?? `${internal ? 'intents' : 'public'}/${slug}`}${query}`,
     pretendToBeVisual: true,
     virtualConsole,
   });
@@ -1066,10 +1208,46 @@ async function smokePage(page) {
         if (sendBtn) {
           const filled = fillStep(doc.body, doc);
           await settle(doc, fetchImpl);
+          // EF-32 negative probe: the e-mail typed, the consent NOT ticked — nothing personal may arrive
+          const consentEntities = (pgPlan.creates || []).map(c => c.entity).filter(e => consentPair(e));
+          if (consentEntities.length) {
+            const boxes = Array.from(doc.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(el => {
+              const id = el.getAttribute('id');
+              const label = (id && doc.querySelector(`label[for="${id}"]`)) || el.closest('label') || el.parentElement;
+              return CONSENT_RE.test(`${el.getAttribute('name') || ''} ${el.getAttribute('aria-label') || ''} ${text(label)}`);
+            });
+            for (const b of boxes) {
+              const checked = b.getAttribute('aria-checked') === 'true' || b.checked === true;
+              if (checked) click(b);
+            }
+            await settle(doc, fetchImpl);
+            if (boxes.length) {
+              const beforeNeg = log.created.length;
+              click(sendBtn);
+              await settle(doc, fetchImpl, CONFIRM_MS);
+              pageReport.steps.push({ step: 'consent-off', created: log.created.length - beforeNeg, text: text(doc.body).slice(0, 160) });
+              if ((log.consent || []).length) {
+                fail(`sends personal data without consent: ${log.consent[0]} — the e-mail must not be sent without the tick`);
+                pageReport.result = 'consent-leak';
+                return pageReport;
+              }
+              if (log.created.length > beforeNeg) {
+                pageReport.result = 'success';     // sent without the e-mail — the positive send is proven too
+                return pageReport;
+              }
+              for (const b of boxes) click(b);   // tick it and send for real
+              await settle(doc, fetchImpl);
+            }
+          }
           const before = log.created.length;
           click(sendBtn);
           await settle(doc, fetchImpl, CONFIRM_MS);
           pageReport.steps.push({ step: 1, label: 'send', actions: filled, text: text(doc.body).slice(0, 200) });
+          if ((log.consent || []).length) {
+            fail(`sends personal data without consent: ${log.consent[0]}`);
+            pageReport.result = 'consent-leak';
+            return pageReport;
+          }
           if (log.created.length > before) {
             pageReport.result = 'success';
             pageReport.steps.push({ step: 'success', text: text(doc.querySelector('[data-journey-success]') || doc.body).slice(0, 300) });
@@ -1223,6 +1401,7 @@ async function smokePage(page) {
     pageReport.requests = log.requests.filter(r => !/sentry/.test(r)).slice(0, 20);
     pageReport.created = log.created;
     pageReport.updated = log.updated;
+    pageReport.refused = log.refused || [];
     if (log.unexpected.length) pageReport.warnings.push(`unexpected requests: ${log.unexpected.slice(0, 5).join(' | ')}`);
     try { if (root) root.unmount(); } catch { /* already gone */ }
     console.error = origConsoleError;
@@ -1231,10 +1410,145 @@ async function smokePage(page) {
   }
 }
 
+// ── 7b. A view for one record, opened the way the overview opens it ───────────
+const HEX = /([0-9a-f]{24})/;
+function idOf(v) { const m = HEX.exec(typeof v === 'string' ? v : JSON.stringify(v ?? '')); return m ? m[1] : null; }
+function entityOfId(id) {
+  for (const ent of Object.keys(apps)) if (recordsFor(ent)[id]) return ent;
+  return null;
+}
+async function smokeView(view) {
+  const vReport = { slug: `view:${view.route}`, file: view.file, internal: true, view: true, steps: [], result: 'unknown', errors: [], warnings: [], requests: [] };
+  const planPages = (planData && planData.public_pages) || [];
+  const linkPages = planPages.filter(p => p && p.link_param && p.link_param.entity);
+  const editRefs = (view.edits || []).map(r => String(r).split('.'));
+  const composeRefs = (view.compose || []).map(c => String(c.field || '').split('.'));
+  const qrView = linkPages.length > 0 && /\bqr\b/i.test([view.purpose, ...(view.contract || []), JSON.stringify(view.label || {})].join(' '));
+  const oneRecord = !view.shows_marked && (editRefs.length > 0 || qrView);
+  const strict = oneRecord;                     // the chain's views fail; other views only warn
+  const fail = (msg) => { (strict ? vReport.errors : vReport.warnings).push(msg); (strict ? errors : warnings).push(`${view.file}: render-smoke 'view:${view.route}': ${msg}`); };
+  let bundle;
+  try { bundle = await bundlePage({ slug: `view-${view.route}`, file: view.file }); }
+  catch (e) { fail(`does not bundle: ${String(e && e.message || e).slice(0, 400)}`); vReport.result = 'bundle-error'; return vReport; }
+  // the record the overview opens it for: the edited entity, else the read of a link entity (or its child)
+  const linkEntities = linkPages.map(p => p.link_param.entity);
+  const ent = (editRefs[0] && editRefs[0][0]) || ((view.reads || []).find(r => linkEntities.includes(r.entity)) || (view.reads || [])[0] || {}).entity;
+  const recId = ent ? Object.keys(recordsFor(ent))[0] : null;
+  const query = oneRecord && recId ? `?record=${recId}` : '';
+  vReport.opened_with = query;
+  const cfg = { version: 1, public_api_base: PUBLIC_API_BASE, unpublished_count: 0,
+    pages: Object.fromEntries(pages.map(p => [p.slug, applyPolicy(pageConfig(p), providedPolicy[p.slug])])) };
+  const log = { requests: [], created: [], updated: [], unexpected: [] };
+  const runtimeErrors = [];
+  const dom = installDom(view.route, (e) => { runtimeErrors.push(String(e && e.message || e).slice(0, 300)); }, true, query, `ansicht/${view.route}`);
+  const doc = dom.window.document;
+  const fetchImpl = makeFetch(cfg, log);
+  dom.window.fetch = fetchImpl;
+  Object.defineProperty(globalThis, 'fetch', { value: fetchImpl, configurable: true, writable: true });
+  let root = null;
+  try {
+    const { React, createRoot, HashRouter, Page } = await import(pathToFileURL(bundle.outfile).href + `?t=${Date.now()}`);
+    let boundaryError = null;
+    class Boundary extends React.Component {
+      constructor(props) { super(props); this.state = { error: null }; }
+      static getDerivedStateFromError(error) { return { error }; }
+      componentDidCatch(error) { boundaryError = error; }
+      render() { return this.state.error ? React.createElement('div', { 'data-smoke-crash': '' }, String(this.state.error && this.state.error.message || this.state.error)) : this.props.children; }
+    }
+    root = createRoot(doc.getElementById('root'));
+    root.render(React.createElement(Boundary, null, React.createElement(HashRouter, null, React.createElement(Page, null))));
+    await settle(doc, fetchImpl);
+    await settle(doc, fetchImpl, 3000);
+    if (boundaryError || doc.querySelector('[data-smoke-crash]')) {
+      fail(`crashes when opened${query ? ` with ${query}` : ''}: ${String(boundaryError && boundaryError.message || text(doc.querySelector('[data-smoke-crash]'))).slice(0, 300)}`);
+      vReport.result = 'crash';
+      return vReport;
+    }
+    // 1. the QR / link goes to a planned page for the record's OWN parent
+    if (qrView && recId) {
+      const links = Array.from(doc.querySelectorAll('[data-public-link]')).map(el => el.getAttribute('data-public-link') || '');
+      const rec = recordsFor(ent)[recId];
+      let expected = linkEntities.includes(ent) ? recId : null;
+      if (!expected && rec) {
+        for (const v of Object.values(rec.fields || {})) {
+          const id = idOf(v);
+          if (id && linkEntities.includes(entityOfId(id) || '')) { expected = id; break; }
+        }
+      }
+      vReport.steps.push({ step: 'qr', links, expected });
+      if (!links.length) fail(`shows no join link for ${query} — the QR is built with <PublicPageQr …> from the planned page`);
+      else if (expected && !links.some(l => linkPages.some(p => l.includes(`/public/${p.slug}?${p.link_param.name}=${expected}`)))) {
+        fail(`the join link goes elsewhere: ${links[0].slice(0, 160)} — expected a planned page with ?<param>=${expected} (the parent of the record this view was opened for)`);
+      }
+    }
+    // 2. a composing view writes its text with the children's values
+    for (const [cEnt, cField] of composeRefs) {
+      const patch = log.updated.find(u => entityByAppId(u.app_id) === cEnt && typeof (u.fields || {})[cField] === 'string');
+      const composed = patch ? String(patch.fields[cField]) : '';
+      const kids = [];
+      for (const e of Object.keys(apps)) for (const r of Object.values(recordsFor(e))) {
+        if (e === cEnt || !JSON.stringify(r.fields || {}).includes(recId || '\u0000')) continue;
+        for (const v of Object.values(r.fields || {})) if (typeof v === 'string' && v.length >= 3 && !HEX.test(v)) kids.push(v);
+      }
+      vReport.steps.push({ step: 'compose', field: `${cEnt}.${cField}`, length: composed.length, children: kids.length });
+      if (!composed.trim()) fail(`opened with ${query} it composes nothing into ${cEnt}.${cField} (no save) — compose() must put the text together from the reads`);
+      else if (kids.length && !kids.some(k => composed.includes(k))) fail(`the composed ${cEnt}.${cField} contains none of the records that belong to it — compose() reads the wrong records`);
+    }
+    vReport.result = vReport.errors.length ? 'failed' : 'rendered';
+    if (runtimeErrors.length && strict) fail(`logs a runtime error: ${runtimeErrors[0]}`);
+  } catch (e) {
+    fail(`crashes: ${String(e && e.stack || e).split('\n').slice(0, 3).join(' ').slice(0, 400)}`);
+    vReport.result = 'crash';
+  } finally {
+    vReport.requests = log.requests.filter(r => !/sentry/.test(r)).slice(0, 20);
+    vReport.updated = log.updated;
+    try { if (root) root.unmount(); } catch { /* gone */ }
+    try { dom.window.close(); } catch { /* fine */ }
+  }
+  return vReport;
+}
+
 // ── 8. Run ────────────────────────────────────────────────────────────────────
 for (const page of pages) {
   const tPage = Date.now();
   const r = await smokePage(page);
+  // EF-33: a field the grant does not list was sent (the mock refused it like the platform)
+  for (const refused of r.refused || []) {
+    const msg = /: missing /.test(refused)
+      ? `sends without a field the grant requires — ${refused} (the platform answers 400 missing_fields): every required field comes from the form, values, link or a preset`
+      : `sends a field the grant does not list — ${refused} (the platform answers 400): declare it in the create endpoint's fields or stop writing it`;
+    if (!r.errors.includes(msg)) { r.errors.push(msg); errors.push(`${page.file}: render-smoke '${page.slug}': ${msg}`); }
+  }
+  // EF-32: no create of any walk carries personal data without its consent (wizards too)
+  if (r.result !== 'consent-leak') {
+    const leak = (r.created || []).map(c => consentViolation(entityByAppId(c.app_id), c.fields || {})).find(Boolean);
+    if (leak) {
+      const msg = `sends personal data without consent: ${leak}`;
+      r.errors.push(msg);
+      errors.push(`${page.file}: render-smoke '${page.slug}': ${msg}`);
+    }
+  }
+  // a page opened per record sends FOR that record: a created record names it, or names a child
+  // of it (the feedback names the interaction of THIS event) — never another event's (EF-27/30)
+  const linked = /=([0-9a-f]{24})/.exec(r.opened_with || '');
+  if (linked && r.result === 'success' && (r.created || []).length) {
+    const lid = linked[1];
+    const carries = (r.created || []).some(c => {
+      const body = JSON.stringify(c.fields || {});
+      if (body.includes(lid)) return true;
+      for (const v of Object.values(c.fields || {})) {
+        const id = idOf(v);
+        const e = id ? entityOfId(id) : null;
+        if (e && JSON.stringify((recordsFor(e)[id] || {}).fields || {}).includes(lid)) return true;
+      }
+      return false;
+    });
+    if (!carries) {
+      const msg = `sent for ${r.opened_with} but no created record names that record or one of its children — the page writes for another record`;
+      r.errors.push(msg);
+      errors.push(`${page.file}: render-smoke '${page.slug}': ${msg}`);
+    }
+  }
   r.seconds = Number(secs(tPage));
   report.push(r);
   const stepsWalked = r.steps.filter(s => typeof s.step === 'number').length;
@@ -1243,6 +1557,14 @@ for (const page of pages) {
   } else {
     console.log(`render-smoke: ${page.slug} FAILED (${r.result}) after ${r.seconds}s`);
   }
+}
+
+for (const view of planViews) {
+  const t = Date.now();
+  const r = await smokeView(view);
+  r.seconds = Number(secs(t));
+  report.push(r);
+  console.log(`render-smoke: view ${view.route} ${r.errors.length ? `FAILED (${r.result})` : `OK (${r.result})`} in ${r.seconds}s`);
 }
 
 if (jsonOut) {

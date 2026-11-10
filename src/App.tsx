@@ -20,8 +20,8 @@ const AppMap = lazy(() => import('@/pages/AppMap'));
 const QrCodeView = lazy(() => import('@/pages/views/QrCodeView'));
 const ZusammenfassungView = lazy(() => import('@/pages/views/ZusammenfassungView'));
 // <custom:imports>
-const IntentInteraktionAktivierenPage = lazy(() => import('@/pages/intents/InteraktionAktivierenPage'));
 import { DashboardSkeleton } from '@/components/DashboardStates';
+const IntentInteraktionAktivierenPage = lazy(() => import('@/pages/intents/InteraktionAktivierenPage'));
 const IntentFeedbacksZusammenfassenPage = lazy(() => import('@/pages/intents/FeedbacksZusammenfassenPage'));
 const IntentKiAntwortEintragenPage = lazy(() => import('@/pages/intents/KiAntwortEintragenPage'));
 // </custom:imports>

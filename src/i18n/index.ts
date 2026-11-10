@@ -1779,20 +1779,20 @@ export const LABELS: Record<CoreLocale, LabelBundle> = {
           "reihenfolge": "Order",
           "frage": "Question",
           "erlaeuterung": "Explanation",
-          "vorprompt": "Pre-prompt",
+          "vorprompt": "Pre-Prompt",
           "endprompt": "Final Prompt",
           "aktiv": "Active"
         },
         "lookups": {}
       },
       "feedbacks": {
-        "name": "Feedback",
+        "name": "Feedbacks",
         "app_id": "6aeec79f23396a98fced78d7",
         "fields": {
           "interaktion": "Interaction",
           "kuerzel": "Abbreviation",
           "feedback_text": "Your Feedback",
-          "absende_kennung": "Sender ID"
+          "absende_kennung": "Submitter ID"
         },
         "lookups": {}
       },

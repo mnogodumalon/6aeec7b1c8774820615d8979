@@ -154,6 +154,89 @@ for (const slug of builtSlugs) {
   if (!flows.some(f => f.slug === slug)) warnings.push(`flow '${slug}' was built but is not in the plan`);
 }
 
+// ── Every way a page WRITES a field (EF-33, Doodle 0.0.541) ─────────────────
+// A repair hid `auswahl` in a plan step's `values` after check-plan refused it as a visitor
+// field — the grant did not list it and the live POST got 400. What a page writes is: the
+// form's `fields` (useStepForm), a plan step's `values` and `link` (useJourneySubmit), and a
+// direct createPublicRecord payload. Returns [{ entity|null, key, how, line }].
+function wkMatchClose(src, open) {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '{' || ch === '(' || ch === '[') depth++;
+    else if (ch === '}' || ch === ')' || ch === ']') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+function wkEnclosingOpen(src, at) {
+  let depth = 0;
+  for (let i = at; i >= 0; i--) {
+    const ch = src[i];
+    if (ch === '}' || ch === ')' || ch === ']') depth++;
+    else if (ch === '{' || ch === '(' || ch === '[') { if (depth === 0) return ch === '{' ? i : -1; depth--; }
+  }
+  return -1;
+}
+function wkTopKeys(obj) {
+  const body = obj.slice(1, -1);
+  const parts = [];
+  let depth = 0, start = 0, quote = null;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (quote) { if (ch === quote && body[i - 1] !== '\\') quote = null; continue; }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+    if ('([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch)) depth--;
+    else if (ch === ',' && depth === 0) { parts.push(body.slice(start, i)); start = i + 1; }
+  }
+  parts.push(body.slice(start));
+  const keys = [];
+  for (const p of parts) {
+    const t = p.trim();
+    if (t.startsWith('...') || t.startsWith('[')) { keys.push('*'); continue; }   // a spread or a computed key: unknown
+    if (!t) continue;
+    const m = /^['"]?([A-Za-z_$][\w$]*)['"]?\s*(?::|$)/.exec(t);
+    if (m) keys.push(m[1]);
+  }
+  return keys;
+}
+function writtenKeys(src) {
+  const out = [];
+  const lineAt = (i) => src.slice(0, i).split('\n').length;
+  // a plan step: { key, entity: 'x', …, values: {…} | () => ({…}), link: {…} }
+  for (const m of src.matchAll(/\bentity\s*:\s*['"](\w+)['"]/g)) {
+    const open = wkEnclosingOpen(src, m.index - 1);
+    if (open < 0) continue;
+    const close = wkMatchClose(src, open);
+    if (close < 0) continue;
+    const obj = src.slice(open, close + 1);
+    for (const how of ['values', 'link']) {
+      const vm = new RegExp(`\\b${how}\\s*:\\s*(?:\\([^)]*\\)\\s*(?::\\s*[\\w.<>\\[\\], ]+)?\\s*=>\\s*\\(?\\s*)?\\{`).exec(obj);
+      if (!vm) continue;
+      const vOpen = open + vm.index + vm[0].length - 1;
+      const vClose = wkMatchClose(src, vOpen);
+      if (vClose < 0) continue;
+      for (const key of wkTopKeys(src.slice(vOpen, vClose + 1))) out.push({ entity: m[1], key, how, line: lineAt(vOpen) });
+    }
+  }
+  // the form's fields: useStepForm('x', { fields: ['a', 'b'] })
+  for (const m of src.matchAll(/\buseStepForm\(\s*['"](\w+)['"]\s*,\s*\{/g)) {
+    const open = m.index + m[0].length - 1;
+    const close = wkMatchClose(src, open);
+    if (close < 0) continue;
+    const fm = /\bfields\s*:\s*\[([^\]]*)\]/.exec(src.slice(open, close + 1));
+    if (!fm) { out.push({ entity: m[1], key: '*', how: 'form', line: lineAt(m.index) }); continue; }
+    for (const k of fm[1].matchAll(/['"](\w+)['"]/g)) out.push({ entity: m[1], key: k[1], how: 'form', line: lineAt(m.index) });
+  }
+  // a direct createPublicRecord(cfg, page, { … })
+  for (const m of src.matchAll(/\bcreatePublicRecord\(\s*[^,]+,\s*[^,]+,\s*\{/g)) {
+    const open = m.index + m[0].length - 1;
+    const close = wkMatchClose(src, open);
+    if (close < 0) continue;
+    for (const key of wkTopKeys(src.slice(open, close + 1))) out.push({ entity: null, key, how: 'createPublicRecord', line: lineAt(m.index) });
+  }
+  return out;
+}
 // ── Public surface against the plan
 if (pages.length && existsSync(SURFACE)) {
   let surface = { pages: [] };
@@ -182,6 +265,24 @@ if (pages.length && existsSync(SURFACE)) {
       for (const k of have) {
         if (!(k in (c.fields || {}))) errors.push(`${file}: public page '${page.slug}' asks visitors for '${c.entity}.${k}' — not a visitor field in the plan (${Object.keys(c.fields || {}).join(', ')})`);
       }
+    }
+  }
+  // EF-33: what the page WRITES (form fields, plan step values/link, createPublicRecord) is
+  // what the plan orders — a refused field moved to `values` passed this check before
+  for (const page of pages) {
+    const sp = byslug.get(page.slug);
+    const compFile = sp && sp.component ? `${PUBLIC_DIR}/${sp.component}.tsx` : null;
+    if (!compFile || !existsSync(compFile)) continue;
+    const src = readFileSync(compFile, 'utf8');
+    const ordered = new Map((page.creates || []).map(c => [c.entity, new Set([...Object.keys(c.fields || {}), ...Object.keys(c.fixed || {})])]));
+    const all = new Set([...ordered.values()].flatMap(s => [...s]));
+    const seen = new Set();
+    for (const w of writtenKeys(src)) {
+      const allowed = w.entity ? ordered.get(w.entity) : all;
+      if (!allowed) { if (w.how !== 'form') errors.push(`${compFile}:${w.line}: public page '${page.slug}' writes '${w.entity}.${w.key}' (${w.how}) — the plan has no create of '${w.entity}' on this page`); continue; }
+      if (w.key === '*' || allowed.has(w.key) || seen.has(`${w.entity}.${w.key}`)) continue;
+      seen.add(`${w.entity}.${w.key}`);
+      errors.push(`${compFile}:${w.line}: public page '${page.slug}' writes '${w.entity ?? 'the record'}.${w.key}' through ${w.how} — not in the plan (${[...allowed].join(', ')}). Never move it to another write path: remove the write, or report the plan gap`);
     }
   }
   for (const sp of surface.pages || []) {

@@ -43,9 +43,9 @@ export interface IntentLink {
 
 export const INTENTS: IntentLink[] = [
   // <custom:intents>
-  { path: '/intents/interaktion-aktivieren', label: { de: 'Interaktion aktiv setzen', en: 'Activate interaction' }, icon: IconPlayerPlay, description: 'Interaktion aktiv setzen und QR-Code bildschirmfüllend öffnen' },
-  { path: '/intents/feedbacks-zusammenfassen', label: { de: 'Feedbacks zusammenfassen', en: 'Summarise feedback' }, icon: IconListDetails, description: 'Feedbacks einer Interaktion zu einem Text zusammenführen und in eigenem Tab öffnen' },
-  { path: '/intents/ki-antwort-eintragen', label: { de: 'KI-Antwort eintragen', en: 'Enter AI answer' }, icon: IconRobot, description: 'Antwort des Chatbots bei einer Zusammenfassung eintragen' },
+  { path: '/intents/interaktion-aktivieren', label: { de: 'Interaktion aktiv setzen', en: 'Activate interaction' }, icon: IconPlayerPlay, description: { de: 'Interaktion aktiv setzen und QR-Code bildschirmfüllend öffnen', en: 'Set interaction active and open QR code in full screen' } },
+  { path: '/intents/feedbacks-zusammenfassen', label: { de: 'Feedbacks zusammenfassen', en: 'Summarise feedback' }, icon: IconListDetails, description: { de: 'Feedbacks einer Interaktion zu einem Text zusammenführen und in eigenem Tab öffnen', en: 'Merge feedback from an interaction into one text and open in a new tab' } },
+  { path: '/intents/ki-antwort-eintragen', label: { de: 'KI-Antwort eintragen', en: 'Enter AI answer' }, icon: IconRobot, description: { de: 'Antwort des Chatbots bei einer Zusammenfassung eintragen', en: 'Enter chatbot\'s answer for a summary' } },
   // </custom:intents>
 ];
 
@@ -65,5 +65,5 @@ export const INTENTS_PENDING = false;
  * pulsing "werden erstellt …" in every deployed Phase-1 bundle forever — no
  * code path redeploys Phase 1 without the flag (live 03.09.2026).
  */
-export const INTENTS_PENDING_SINCE: string | null = '2026-11-07T06:41:28+00:00';
+export const INTENTS_PENDING_SINCE: string | null = null;
 export const PENDING_MAX_MINUTES = 30;
